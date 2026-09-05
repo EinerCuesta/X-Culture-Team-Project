@@ -71,7 +71,6 @@ a{ color:inherit; }
 }
 .welcome-mascot{ font-size:56px; margin-bottom:6px; display:inline-block; animation: bob 3s ease-in-out infinite; }
 @keyframes bob{ 0%,100%{transform:translateY(0) rotate(-3deg);} 50%{transform:translateY(-8px) rotate(3deg);} }
-@keyframes pulse{ 0%,100%{ opacity:1; } 50%{ opacity:0.3; } }
 .welcome-card h1{ font-size:28px; margin-bottom:8px; }
 .welcome-card .subtitle{ color:var(--plum-soft); font-weight:700; margin-bottom:28px; font-size:15px;}
 .welcome-card .accent-underline{ display:inline-block; height:8px; width:64px; background:var(--pink); border-radius:8px; margin:0 auto 28px; }
@@ -223,6 +222,9 @@ a{ color:inherit; }
 /* Roadmap */
 .week-card{ border-radius:var(--radius); padding:22px; background:var(--white); box-shadow:var(--shadow); margin-bottom:16px; border:2px solid transparent; }
 .week-card.active-week{ border-color: var(--lavender-deep); background: linear-gradient(180deg, var(--white), #FAF7FF); }
+.week-card.status-current{ border-color: var(--lavender-deep); background: linear-gradient(180deg, var(--white), #FAF7FF); }
+.week-card.status-done{ border-color: var(--green-deep); opacity:0.92; }
+.week-card.status-upcoming{ border-color: transparent; }
 .week-head{ display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:10px; }
 .week-badge{ background:var(--plum); color:var(--white); font-size:11px; font-weight:800; padding:4px 10px; border-radius:10px; }
 .week-badge.current{ background:var(--pink-deep); }
@@ -268,7 +270,7 @@ a{ color:inherit; }
 .tl-name{ font-weight:800; font-size:15px; margin:2px 0; }
 
 /* Team members */
-.member-card{ background:var(--white); border-radius:var(--radius); padding:20px; box-shadow:var(--shadow); text-align:center; }
+.member-card{ background:var(--white); border-radius:var(--radius); padding:20px; box-shadow:var(--shadow); text-align:center; position:relative; }
 .member-avatar{ width:56px; height:56px; border-radius:50%; background:linear-gradient(135deg, var(--pink), var(--lavender)); display:flex; align-items:center; justify-content:center; font-weight:800; color:var(--white); font-size:20px; margin:0 auto 10px; }
 .member-name{ font-weight:800; font-size:15px; }
 .member-email{ font-size:12px; color:var(--plum-soft); margin-bottom:10px; word-break:break-word; }
@@ -330,11 +332,6 @@ textarea.tnote{ width:100%; padding:10px 14px; border-radius:12px; border:2px so
 </head>
 <body>
 
-<div id="syncBanner" style="position:fixed; top:14px; left:50%; transform:translateX(-50%); z-index:60; background:var(--plum); color:var(--white); padding:9px 18px; border-radius:14px; font-weight:800; font-size:12px; box-shadow:var(--shadow-lift); display:flex; align-items:center; gap:8px;">
-  <span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:var(--yellow); animation: pulse 1s infinite;"></span>
-  Connecting to your team's shared data...
-</div>
-
 <div class="blob blob1"></div>
 <div class="blob blob2"></div>
 
@@ -354,12 +351,18 @@ textarea.tnote{ width:100%; padding:10px 14px; border-radius:12px; border:2px so
         <label for="regEmail">Student Email</label>
         <input type="email" id="regEmail" placeholder="e.g. hana@university.edu" required>
       </div>
+      <div class="field">
+        <label for="regTimezone">Your Timezone</label>
+        <select id="regTimezone" style="width:100%; padding:13px 16px; border-radius:14px; border:2px solid var(--cream-2); background:var(--cream); font-size:14px; color:var(--plum);"></select>
+      </div>
       <button type="submit" class="btn-primary">Join the team ✨</button>
       <p class="form-error" id="regError">Please fill in both fields with a valid email 🌷</p>
     </form>
     <div class="welcome-team-badge">🧭 Track 2026-2a · Amigos Caffè, Trieste</div>
     <div id="storageWarning" style="display:none; margin-top:16px; text-align:left; background:#FBEFD0; border-radius:14px; padding:12px 14px; font-size:12px; font-weight:700; color:#8A6A1E;">
-      ⚠️ <span class="warning-text">Your browser is blocking local storage (common in Private/Incognito mode). Your login may not be remembered after refreshing. Try a normal browser window instead.</span>
+      ⚠️ Your browser is blocking local storage (common in Private/Incognito mode, or when opening this file directly with certain browsers). Your login may not be remembered after refreshing.
+      <br><br>
+      <strong>Fix:</strong> open this page in a normal (non-private) browser window, or host it online (e.g. GitHub Pages) instead of opening the file directly.
     </div>
   </div>
 </div>
@@ -492,6 +495,12 @@ textarea.tnote{ width:100%; padding:10px 14px; border-radius:12px; border:2px so
           </div>
         </div>
 
+        <div class="card" style="margin-top:18px;">
+          <div class="card-title">🌍 Meeting Time Around the World</div>
+          <div style="font-size:12px; color:var(--plum-soft); font-weight:700; margin-bottom:10px;">See how the selected day/time lands in each teammate's own timezone — pick a day/time above to preview before voting.</div>
+          <div id="timezoneTable"></div>
+        </div>
+
         <div class="grid grid-2" style="margin-top:18px; align-items:start;">
           <div class="card">
             <div class="card-title">✅ Confirm Attendance</div>
@@ -531,6 +540,9 @@ textarea.tnote{ width:100%; padding:10px 14px; border-radius:12px; border:2px so
           <div class="mini-card"><h4>🟡 Not started</h4><div class="val" id="taskNotStartedCount">0</div></div>
           <div class="mini-card"><h4>🔵 Working on it</h4><div class="val" id="taskWorkingCount">0</div></div>
           <div class="mini-card"><h4>🟢 Finished</h4><div class="val" id="taskFinishedCount">0</div></div>
+        </div>
+        <div class="grid grid-4" style="margin-bottom:18px;">
+          <div class="mini-card"><h4>⚠️ Overdue</h4><div class="val" id="taskOverdueCount" style="color:var(--red);">0</div></div>
         </div>
         <div id="taskFilterBar" style="display:flex; gap:8px; margin-bottom:14px; flex-wrap:wrap;"></div>
         <div id="taskList"></div>
@@ -585,6 +597,12 @@ textarea.tnote{ width:100%; padding:10px 14px; border-radius:12px; border:2px so
             </div>
           </div>
         </div>
+        <div class="card" style="margin-bottom:18px;">
+          <div class="card-title">🌍 My Timezone</div>
+          <div style="font-size:12px; color:var(--plum-soft); font-weight:700; margin-bottom:10px;">Used to convert meeting times to your local hour automatically.</div>
+          <select id="profileTimezone" style="width:100%; max-width:360px; padding:11px 14px; border-radius:14px; border:2px solid var(--cream-2); background:var(--cream); font-size:14px; color:var(--plum); margin-bottom:10px;"></select>
+          <br><button class="btn btn-lav btn-sm" id="saveProfileTimezoneBtn">Save timezone</button>
+        </div>
         <div class="grid grid-4" style="margin-bottom:18px;">
           <div class="mini-card"><h4>Tasks completed</h4><div class="val" id="pfCompleted">0</div></div>
           <div class="mini-card"><h4>Tasks in progress</h4><div class="val" id="pfProgress">0</div></div>
@@ -617,6 +635,7 @@ textarea.tnote{ width:100%; padding:10px 14px; border-radius:12px; border:2px so
       <div class="form-row"><label>Task name</label><input type="text" id="taskName" required></div>
       <div class="form-row"><label>Description</label><textarea id="taskDesc" rows="2"></textarea></div>
       <div class="form-row"><label>Assigned member</label><select id="taskAssignee"></select></div>
+      <div class="form-row"><label>Belongs to Weekly Roadmap</label><select id="taskWeek"></select></div>
       <div class="form-row"><label>Deadline</label><input type="date" id="taskDeadline"></div>
       <div class="form-row"><label>Priority</label>
         <select id="taskPriority"><option>Low</option><option selected>Medium</option><option>High</option></select>
@@ -643,8 +662,6 @@ textarea.tnote{ width:100%; padding:10px 14px; border-radius:12px; border:2px so
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore-compat.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
