@@ -71,6 +71,7 @@ a{ color:inherit; }
 }
 .welcome-mascot{ font-size:56px; margin-bottom:6px; display:inline-block; animation: bob 3s ease-in-out infinite; }
 @keyframes bob{ 0%,100%{transform:translateY(0) rotate(-3deg);} 50%{transform:translateY(-8px) rotate(3deg);} }
+@keyframes pulse{ 0%,100%{ opacity:1; } 50%{ opacity:0.3; } }
 .welcome-card h1{ font-size:28px; margin-bottom:8px; }
 .welcome-card .subtitle{ color:var(--plum-soft); font-weight:700; margin-bottom:28px; font-size:15px;}
 .welcome-card .accent-underline{ display:inline-block; height:8px; width:64px; background:var(--pink); border-radius:8px; margin:0 auto 28px; }
@@ -329,6 +330,11 @@ textarea.tnote{ width:100%; padding:10px 14px; border-radius:12px; border:2px so
 </head>
 <body>
 
+<div id="syncBanner" style="position:fixed; top:14px; left:50%; transform:translateX(-50%); z-index:60; background:var(--plum); color:var(--white); padding:9px 18px; border-radius:14px; font-weight:800; font-size:12px; box-shadow:var(--shadow-lift); display:flex; align-items:center; gap:8px;">
+  <span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:var(--yellow); animation: pulse 1s infinite;"></span>
+  Connecting to your team's shared data...
+</div>
+
 <div class="blob blob1"></div>
 <div class="blob blob2"></div>
 
@@ -353,9 +359,7 @@ textarea.tnote{ width:100%; padding:10px 14px; border-radius:12px; border:2px so
     </form>
     <div class="welcome-team-badge">🧭 Track 2026-2a · Amigos Caffè, Trieste</div>
     <div id="storageWarning" style="display:none; margin-top:16px; text-align:left; background:#FBEFD0; border-radius:14px; padding:12px 14px; font-size:12px; font-weight:700; color:#8A6A1E;">
-      ⚠️ Your browser is blocking local storage (common in Private/Incognito mode, or when opening this file directly with certain browsers). Your login may not be remembered after refreshing.
-      <br><br>
-      <strong>Fix:</strong> open this page in a normal (non-private) browser window, or host it online (e.g. GitHub Pages) instead of opening the file directly.
+      ⚠️ <span class="warning-text">Your browser is blocking local storage (common in Private/Incognito mode). Your login may not be remembered after refreshing. Try a normal browser window instead.</span>
     </div>
   </div>
 </div>
@@ -639,6 +643,8 @@ textarea.tnote{ width:100%; padding:10px 14px; border-radius:12px; border:2px so
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore-compat.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
