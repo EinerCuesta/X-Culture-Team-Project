@@ -1615,4 +1615,4 @@ function renderAll(){
 function sendMeetingReminder(meetingData){
   // TODO: connect to a real email API (e.g. EmailJS, SendGrid, Supabase Edge Function).
   console.log('[Simulated email reminder]', meetingData);
-} 
+}
