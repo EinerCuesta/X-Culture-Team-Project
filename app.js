@@ -131,9 +131,30 @@ function subscribeToCloud(){
       if(suppressNextSnapshot){
         suppressNextSnapshot = false;
       } else if(pendingLocalWrite){
-        // We have a local change queued/in-flight that the cloud doesn't
-        // reflect yet — ignore this snapshot rather than clobbering our
-        // own (more recent) state with a stale cloud copy.
+        // We have a local change in flight that the cloud doesn't reflect
+        // yet, so we must NOT blindly overwrite STATE with this snapshot
+        // (that would clobber our own more-recent edit, e.g. a checkbox
+        // we just ticked). BUT we also must not silently drop new
+        // users/tasks/votes/comments that a teammate just wrote from
+        // another device — THAT was the original bug: a leader idly
+        // checking a checklist item could make a brand-new teammate's
+        // registration invisible until the leader's next save finished.
+        // So instead of ignoring the snapshot entirely, we merge in
+        // anything new from the cloud that doesn't touch what we're
+        // mid-write on.
+        const cloudState = snap.data().state;
+        if(cloudState){
+          try{
+            const incoming = JSON.parse(cloudState);
+            mergeRemoteAdditions(incoming);
+            persistLocalCache();
+            if(document.getElementById('app').style.display !== 'none'){
+              renderAll();
+            }
+          }catch(e){
+            console.error('[Sync] Failed to merge incoming snapshot while a local write was pending.', e);
+          }
+        }
       } else {
         const cloudState = snap.data().state;
         if(cloudState){
@@ -168,6 +189,108 @@ function subscribeToCloud(){
     console.error('Firestore subscription error:', err);
     showStorageWarning('Could not connect to the shared team database. Showing your local copy instead — changes may not sync with teammates until this reconnects.');
   });
+}
+
+/* Merge additions from an incoming cloud snapshot into the current STATE,
+   used only when we have our own local write in flight and can't safely
+   do a full overwrite. This is intentionally conservative: it only ADDS
+   things we don't have yet (new users, new tasks, new votes, new
+   comments, new history entries, new checklist weeks) rather than
+   overwriting fields we might be actively editing (e.g. a task's status,
+   a checklist checkbox, an attendance answer). This is exactly what fixes
+   "a new teammate registers but I don't see them until I stop clicking
+   things" — their user object gets merged in immediately even mid-write,
+   without erasing whatever we're in the middle of saving. */
+function mergeRemoteAdditions(incoming){
+  if(!incoming || !STATE) return;
+
+  // --- Users: add any user we don't have yet (by id). Never remove a
+  // user here — removals are explicit (removeMemberCompletely) and will
+  // arrive as a normal, non-pending-write snapshot instead. ---
+  if(Array.isArray(incoming.users)){
+    const myIds = new Set(STATE.users.map(u=>u.id));
+    incoming.users.forEach(u=>{
+      if(!myIds.has(u.id)){
+        STATE.users.push(u);
+        myIds.add(u.id);
+      }
+    });
+  }
+
+  // --- Tasks: add any task we don't have yet (by id). Existing tasks are
+  // left untouched so we don't clobber a status change we're mid-save on. ---
+  if(Array.isArray(incoming.tasks)){
+    const myTaskIds = new Set(STATE.tasks.map(t=>t.id));
+    incoming.tasks.forEach(t=>{
+      if(!myTaskIds.has(t.id)){
+        STATE.tasks.push(t);
+        myTaskIds.add(t.id);
+      }
+    });
+  }
+
+  // --- Comments: add any comment we don't have yet (by id). ---
+  if(Array.isArray(incoming.comments)){
+    const myCommentIds = new Set(STATE.comments.map(c=>c.id));
+    incoming.comments.forEach(c=>{
+      if(!myCommentIds.has(c.id)){
+        STATE.comments.push(c);
+        myCommentIds.add(c.id);
+      }
+    });
+  }
+
+  // --- Meeting votes: merge per-week vote arrays by userId, favoring
+  // whichever vote we don't already have (adds teammates' new votes
+  // without erasing a vote we just cast locally). ---
+  if(incoming.meetings && incoming.meetings.votes){
+    Object.keys(incoming.meetings.votes).forEach(wi=>{
+      if(!STATE.meetings.votes[wi]) STATE.meetings.votes[wi] = [];
+      const mine = STATE.meetings.votes[wi];
+      const myVoterIds = new Set(mine.map(v=>v.userId));
+      (incoming.meetings.votes[wi]||[]).forEach(v=>{
+        if(!myVoterIds.has(v.userId)){
+          mine.push(v);
+          myVoterIds.add(v.userId);
+        }
+      });
+    });
+  }
+
+  // --- Attendance: merge per-week, per-user records, only filling in
+  // users we don't have an entry for yet in that week. ---
+  if(incoming.meetings && incoming.meetings.attendance){
+    Object.keys(incoming.meetings.attendance).forEach(wi=>{
+      if(!STATE.meetings.attendance[wi]) STATE.meetings.attendance[wi] = {};
+      Object.keys(incoming.meetings.attendance[wi]).forEach(uid=>{
+        if(!(uid in STATE.meetings.attendance[wi])){
+          STATE.meetings.attendance[wi][uid] = incoming.meetings.attendance[wi][uid];
+        }
+      });
+    });
+  }
+
+  // --- Checklists: add any week's checklist we don't have yet. Existing
+  // checklists are left alone so we don't undo a checkbox we just ticked. ---
+  if(incoming.meetings && incoming.meetings.checklists){
+    Object.keys(incoming.meetings.checklists).forEach(wi=>{
+      if(!STATE.meetings.checklists[wi]){
+        STATE.meetings.checklists[wi] = incoming.meetings.checklists[wi];
+      }
+    });
+  }
+
+  // --- History: add any archived meeting we don't have yet (by archivedAt
+  // timestamp, since history entries don't carry their own id). ---
+  if(Array.isArray(incoming.history)){
+    const myArchiveStamps = new Set(STATE.history.map(h=>h.archivedAt));
+    incoming.history.forEach(h=>{
+      if(!myArchiveStamps.has(h.archivedAt)){
+        STATE.history.push(h);
+        myArchiveStamps.add(h.archivedAt);
+      }
+    });
+  }
 }
 
 function persistLocalCache(){
@@ -424,13 +547,23 @@ document.getElementById('registerForm').addEventListener('submit', async functio
   let isNewUser = false;
   if(!user){
     const isFirstUser = STATE.users.length === 0;
+    // Use max existing regNumber + 1 instead of users.length + 1 — this
+    // stays correct even if STATE was momentarily stale (e.g. the fetch
+    // above failed or raced with another registration), and even if a
+    // member was removed in between, so two people never end up sharing
+    // the same regNumber.
+    const maxRegNumber = STATE.users.reduce((max,u)=> Math.max(max, u.regNumber||0), 0);
+    // Also guard the leader role the same way: only assign 'leader' if
+    // there truly isn't one yet in the team we just fetched, not just
+    // because our local array happened to look empty.
+    const hasExistingLeader = STATE.users.some(u=>u.role==='leader');
     isNewUser = true;
     user = {
       id: 'u_' + Date.now() + '_' + Math.random().toString(36).slice(2,7),
-      regNumber: STATE.users.length + 1,
+      regNumber: maxRegNumber + 1,
       name: name,
       email: email,
-      role: isFirstUser ? 'leader' : 'member',
+      role: (isFirstUser && !hasExistingLeader) ? 'leader' : 'member',
       timezone: timezone,
       joinedAt: new Date().toISOString(),
     };
@@ -443,7 +576,7 @@ document.getElementById('registerForm').addEventListener('submit', async functio
     saveSession(user.id);
     saveState();
 
-    showToast(isFirstUser
+    showToast(user.role === 'leader'
       ? `Welcome, ${name}! You're member #${user.regNumber} and Team Leader 👑`
       : `Welcome, ${name}! You're member #${user.regNumber} ✨`);
     sendWelcomeEmail(user);
