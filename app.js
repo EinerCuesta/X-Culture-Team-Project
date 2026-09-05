@@ -1,12 +1,45 @@
 /* =========================================================
    X-CULTURE TEAM HUB — Amigos Caffè
-   Data / State / Persistence layer (localStorage)
+   Data / State / Persistence layer (Firebase Firestore, shared
+   live across the whole team + localStorage as an offline cache)
    ========================================================= */
 
 const STORAGE_KEY = 'xculture_hub_state_v1';
 const SESSION_KEY = 'xculture_hub_session_v1';
 
 const DAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
+
+/* ---------- Firebase config & setup ---------- */
+const firebaseConfig = {
+  apiKey: "AIzaSyBiM259TlXFAeooHVH9AQmGZLn3QAhLen4",
+  authDomain: "xculture-amigos-hub.firebaseapp.com",
+  projectId: "xculture-amigos-hub",
+  storageBucket: "xculture-amigos-hub.firebasestorage.app",
+  messagingSenderId: "519384063214",
+  appId: "1:519384063214:web:34511e7af1f42372c2e7ff"
+};
+
+// Single shared document holding the entire team's state.
+const FIRESTORE_COLLECTION = 'xculture_teams';
+const FIRESTORE_DOC_ID = 'amigos-caffe-team'; // one team = one doc; change this if you run multiple teams
+
+let fbApp = null;
+let fbDb = null;
+let fbDocRef = null;
+let firebaseReady = false;
+let suppressNextSnapshot = false; // avoid re-render loops when WE just wrote
+
+function initFirebase(){
+  try{
+    fbApp = firebase.initializeApp(firebaseConfig);
+    fbDb = firebase.firestore();
+    fbDocRef = fbDb.collection(FIRESTORE_COLLECTION).doc(FIRESTORE_DOC_ID);
+    firebaseReady = true;
+  }catch(e){
+    console.error('Firebase init failed, falling back to local-only storage.', e);
+    firebaseReady = false;
+  }
+}
 
 /* ---------- Default seed state (matches the X-Culture Amigos Caffè calendar) ---------- */
 function seedState(){
@@ -66,23 +99,78 @@ const DEFAULT_CHECKLIST_ITEMS = [
 
 /* ---------- Load / Save ---------- */
 let STATE = null;
+let saveDebounceTimer = null;
+let firstSnapshotReceived = false;
 
 function loadState(){
+  // 1. Load from local cache immediately so the UI has something to show.
   try{
     const raw = localStorage.getItem(STORAGE_KEY);
-    if(raw){ STATE = JSON.parse(raw); }
-    else { STATE = seedState(); saveState(); }
+    STATE = raw ? JSON.parse(raw) : seedState();
   }catch(e){
-    console.error('Failed to load state, reseeding.', e);
-    STATE = seedState(); saveState();
+    console.error('Failed to load local cache, reseeding.', e);
+    STATE = seedState();
   }
-  // ensure current week's checklist exists
   ensureWeekChecklist(STATE.currentWeekIndex);
 }
 
-function saveState(){
+// Called once Firebase is ready: subscribes to realtime updates so every
+// teammate's browser reflects the same shared data automatically.
+function subscribeToCloud(){
+  if(!firebaseReady){ return; }
+  fbDocRef.onSnapshot((snap)=>{
+    if(snap.exists){
+      if(suppressNextSnapshot){
+        suppressNextSnapshot = false;
+      } else {
+        const cloudState = snap.data().state;
+        if(cloudState){
+          STATE = JSON.parse(cloudState);
+          ensureWeekChecklist(STATE.currentWeekIndex);
+          persistLocalCache();
+          if(document.getElementById('app').style.display !== 'none'){
+            renderAll();
+          }
+        }
+      }
+    } else {
+      // No cloud doc yet — seed it with whatever we have locally.
+      pushStateToCloud();
+    }
+    if(!firstSnapshotReceived){
+      firstSnapshotReceived = true;
+      hideSyncBanner();
+    }
+  }, (err)=>{
+    console.error('Firestore subscription error:', err);
+    showStorageWarning('Could not connect to the shared team database. Showing your local copy instead — changes may not sync with teammates until this reconnects.');
+  });
+}
+
+function persistLocalCache(){
   try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(STATE)); }
-  catch(e){ console.error('Storage save failed', e); showToast('⚠️ Could not save data locally'); }
+  catch(e){ console.error('Local cache save failed', e); }
+}
+
+function pushStateToCloud(){
+  if(!firebaseReady) return;
+  suppressNextSnapshot = true;
+  fbDocRef.set({ state: JSON.stringify(STATE), updatedAt: new Date().toISOString() })
+    .catch(err=>{
+      console.error('Cloud save failed:', err);
+      showStorageWarning('Your last change could not be saved to the shared database. Check your internet connection.');
+    });
+}
+
+// Public save function used everywhere in the app. Saves locally right away
+// (instant UI feedback) and pushes to the cloud in a short debounce window
+// so rapid edits (typing, checkbox spam) don't spam Firestore.
+function saveState(){
+  persistLocalCache();
+  clearTimeout(saveDebounceTimer);
+  saveDebounceTimer = setTimeout(()=>{
+    pushStateToCloud();
+  }, 400);
 }
 
 function ensureWeekChecklist(weekIndex){
@@ -135,9 +223,20 @@ function storageIsWorking(){
   }
 }
 
-function showStorageWarning(){
+function showStorageWarning(customMessage){
   const el = document.getElementById('storageWarning');
-  if(el) el.style.display = 'block';
+  if(el){
+    if(customMessage){
+      const textEl = el.querySelector('.warning-text');
+      if(textEl) textEl.textContent = customMessage;
+    }
+    el.style.display = 'block';
+  }
+}
+
+function hideSyncBanner(){
+  const el = document.getElementById('syncBanner');
+  if(el) el.style.display = 'none';
 }
 
 function getCurrentUser(){
@@ -163,17 +262,36 @@ function isValidEmail(email){
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
 
-document.getElementById('registerForm').addEventListener('submit', function(e){
+document.getElementById('registerForm').addEventListener('submit', async function(e){
   e.preventDefault();
   const name = document.getElementById('regName').value.trim();
   const email = document.getElementById('regEmail').value.trim().toLowerCase();
   const errorEl = document.getElementById('regError');
+  const submitBtn = e.target.querySelector('button[type=submit]');
 
   if(!name || !isValidEmail(email)){
     errorEl.style.display='block';
     return;
   }
   errorEl.style.display='none';
+
+  // Pull the freshest cloud state first so two people registering around the
+  // same moment don't collide on registration numbers or overwrite each other.
+  if(firebaseReady){
+    submitBtn.textContent = 'Joining...';
+    submitBtn.disabled = true;
+    try{
+      const snap = await fbDocRef.get();
+      if(snap.exists && snap.data().state){
+        STATE = JSON.parse(snap.data().state);
+        ensureWeekChecklist(STATE.currentWeekIndex);
+      }
+    }catch(err){
+      console.error('Could not fetch latest team state before registering, using local copy.', err);
+    }
+    submitBtn.textContent = 'Join the team ✨';
+    submitBtn.disabled = false;
+  }
 
   // Check if user with this email already exists -> just log them in
   let user = STATE.users.find(u=>u.email.toLowerCase()===email);
@@ -231,35 +349,49 @@ document.getElementById('logoutBtn').addEventListener('click', function(){
    Fill these in once you have your EmailJS account set up,
    then set EMAILJS_ENABLED to true.
    ========================================================= */
-const EMAILJS_ENABLED = false;
-const EMAILJS_PUBLIC_KEY = 'YOUR_PUBLIC_KEY';
-const EMAILJS_SERVICE_ID = 'YOUR_SERVICE_ID';
-const EMAILJS_TEMPLATE_ID = 'YOUR_TEMPLATE_ID';
+const EMAILJS_ENABLED = true;
+const EMAILJS_PUBLIC_KEY = 'nFXIB4TdpedewRV5-';
+const EMAILJS_SERVICE_ID = 'service_mixyl4e';
+const EMAILJS_TEMPLATE_ID = 'template_n86vmkt';
+
+let emailjsInitialized = false;
+function ensureEmailJsInit(){
+  if(emailjsInitialized || typeof emailjs === 'undefined') return;
+  emailjs.init({ publicKey: EMAILJS_PUBLIC_KEY });
+  emailjsInitialized = true;
+}
 
 function sendWelcomeEmail(user){
   if(!EMAILJS_ENABLED){
     console.log('[EmailJS disabled] Would send welcome email to', user.email);
     return;
   }
+  if(EMAILJS_SERVICE_ID === 'YOUR_SERVICE_ID' || EMAILJS_TEMPLATE_ID === 'YOUR_TEMPLATE_ID'){
+    console.warn('EmailJS Service ID / Template ID not set yet — skipping welcome email.');
+    return;
+  }
   if(typeof emailjs === 'undefined'){
     console.error('EmailJS SDK not loaded.');
     return;
   }
+  ensureEmailJsInit();
   emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_ID, {
     to_name: user.name,
     to_email: user.email,
     reg_number: user.regNumber,
     role: user.role === 'leader' ? 'Team Leader 👑' : 'Member',
     app_link: window.location.href.split('?')[0],
-  }, EMAILJS_PUBLIC_KEY).then(
+  }).then(
     ()=> console.log('Welcome email sent to', user.email),
     (err)=> console.error('Welcome email failed:', err)
   );
 }
 
 /* ---------- Boot sequence ---------- */
+initFirebase();
 loadState();
 loadSession();
+subscribeToCloud();
 if(!storageIsWorking()){
   showStorageWarning();
 }
