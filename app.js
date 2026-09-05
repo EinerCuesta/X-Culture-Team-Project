@@ -62,28 +62,26 @@ function initFirebase(){
 function seedState(){
   return {
     users: [], // {id, name, email, role, joinedAt}
-    currentWeekIndex: 3,
-    // Each week now carries its own `status`: 'done' | 'current' | 'upcoming'.
-    // `startDate`/`deadline` are used to AUTO-DETECT which week we're really
-    // in based on today's real calendar date — the leader can still
-    // override any week's status manually (see Roadmap leader controls),
-    // and a manual override always wins over the auto-detection.
+    currentWeekIndex: 1,
+    // Each week has its own `status`: 'done' | 'current' | 'upcoming'.
+    // ONLY the leader decides this (via the Roadmap page buttons) — simple
+    // and predictable, no automatic date-based guessing involved.
     roadmap: [
-      { id:'w1', title:'Week 1', dateRange:'Aug 24 – Aug 30', goal:'Understand the X-Culture challenge, form our team, and define our strategy.', startDate:'2026-08-24', deadline:'2026-08-31', status:'done',
+      { id:'w1', title:'Week 1', dateRange:'Aug 24 – Aug 30', goal:'Understand the X-Culture challenge, form our team, and define our strategy.', deadline:'2026-08-31', status:'done',
         tasks:['Read project requirements','Introduce ourselves','Assign initial responsibilities','Establish communication channels','Pass the readiness test'] },
-      { id:'w2', title:'Week 2', dateRange:'Aug 31 – Sep 6', goal:'Get to know teammates and prepare to select our client company.', startDate:'2026-08-31', deadline:'2026-09-07', status:'done',
+      { id:'w2', title:'Week 2', dateRange:'Aug 31 – Sep 6', goal:'Get to know teammates and prepare to select our client company.', deadline:'2026-09-07', status:'current',
         tasks:['Video call to meet the team','Review available client challenges','Discuss role division','Select Amigos Caffè as client'] },
-      { id:'w3', title:'Week 3', dateRange:'Sep 7 – Sep 13', goal:'Kick off Section 1: industry & competitor research for Amigos Caffè.', startDate:'2026-09-07', deadline:'2026-09-14', status:'done',
+      { id:'w3', title:'Week 3', dateRange:'Sep 7 – Sep 13', goal:'Kick off Section 1: industry & competitor research for Amigos Caffè.', deadline:'2026-09-14', status:'upcoming',
         tasks:['Research Italian coffee competitors','Identify candidate target markets','Draft consumer interview questions','Begin SWOT analysis'] },
-      { id:'w4', title:'Week 4', dateRange:'Sep 14 – Sep 20', goal:'Finish Section 1 draft and select the proposed target market.', startDate:'2026-09-14', deadline:'2026-09-21', status:'upcoming',
+      { id:'w4', title:'Week 4', dateRange:'Sep 14 – Sep 20', goal:'Finish Section 1 draft and select the proposed target market.', deadline:'2026-09-21', status:'upcoming',
         tasks:['Complete competitor analysis','Conduct consumer/buyer interviews','Finalize target market choice','Submit Section 1 draft'] },
-      { id:'w5', title:'Week 5', dateRange:'Sep 21 – Sep 27', goal:'Work on Section 2: product, pricing, entry mode, logistics, legal & HR.', startDate:'2026-09-21', deadline:'2026-09-28', status:'upcoming',
+      { id:'w5', title:'Week 5', dateRange:'Sep 21 – Sep 27', goal:'Work on Section 2: product, pricing, entry mode, logistics, legal & HR.', deadline:'2026-09-28', status:'upcoming',
         tasks:['Match products to target market','Draft pricing strategy','Compare market entry modes','Research logistics & compliance'] },
-      { id:'w6', title:'Week 6', dateRange:'Sep 28 – Oct 4', goal:'Finish Section 2 and start Section 3: marketing plan.', startDate:'2026-09-28', deadline:'2026-10-05', status:'upcoming',
+      { id:'w6', title:'Week 6', dateRange:'Sep 28 – Oct 4', goal:'Finish Section 2 and start Section 3: marketing plan.', deadline:'2026-10-05', status:'upcoming',
         tasks:['Submit Section 2 draft','Analyze current marketing assets','Choose promotion channels','Draft campaign message'] },
-      { id:'w7', title:'Week 7', dateRange:'Oct 5 – Oct 8', goal:'Assemble the complete report draft and refine all sections.', startDate:'2026-10-05', deadline:'2026-10-05', status:'upcoming',
+      { id:'w7', title:'Week 7', dateRange:'Oct 5 – Oct 8', goal:'Assemble the complete report draft and refine all sections.', deadline:'2026-10-05', status:'upcoming',
         tasks:['Compile Title Page & Exec Summary','Merge all sections','Create promotional material sample','Proofread & format to guidelines'] },
-      { id:'w8', title:'Week 8', dateRange:'Oct 9 – Oct 12', goal:'Finalize and submit the report; complete post-project survey.', startDate:'2026-10-09', deadline:'2026-10-09', status:'upcoming',
+      { id:'w8', title:'Week 8', dateRange:'Oct 9 – Oct 12', goal:'Finalize and submit the report; complete post-project survey.', deadline:'2026-10-09', status:'upcoming',
         tasks:['Final proofreading pass','Submit FINAL report','Submit recommendations summary','Complete post-project survey'] },
     ],
     // Team tasks are now created ONLY by the leader (via the Tasks tab), each one
@@ -128,7 +126,6 @@ function loadState(){
     STATE = seedState();
   }
   ensureWeekChecklist(STATE.currentWeekIndex);
-  autoDetectCurrentWeek();
 }
 
 // Called once Firebase is ready: subscribes to realtime updates so every
@@ -144,7 +141,6 @@ function subscribeToCloud(){
         if(cloudState){
           STATE = JSON.parse(cloudState);
           ensureWeekChecklist(STATE.currentWeekIndex);
-          autoDetectCurrentWeek();
           persistLocalCache();
           if(document.getElementById('app').style.display !== 'none'){
             renderAll();
@@ -471,7 +467,6 @@ document.getElementById('registerForm').addEventListener('submit', async functio
 function enterApp(){
   document.getElementById('welcome-screen').style.display='none';
   document.getElementById('app').style.display='block';
-  autoDetectCurrentWeek();
   buildNav();
   renderAll();
   goPage('dashboard');
@@ -624,55 +619,6 @@ function getProgressStats(){
   const todayIso = new Date().toISOString().slice(0,10);
   const overdue = STATE.tasks.filter(t=>t.status!=='Finished' && t.deadline && t.deadline < todayIso).length;
   return {total, completed, inProgress, pending, pct, overdue};
-}
-
-/* ---------- Auto-detection of the current week by real calendar date ----------
-   Runs every time state loads / renders. Only touches weeks the leader has
-   NOT manually overridden (week.manualOverride !== true), so a leader's
-   explicit choice always wins over the automatic calendar-based guess. */
-function autoDetectCurrentWeek(){
-  if(!STATE || !STATE.roadmap || !STATE.roadmap.length) return;
-  const todayIso = new Date().toISOString().slice(0,10);
-
-  // Figure out which week's date range actually contains today.
-  let detectedIdx = -1;
-  for(let i=0; i<STATE.roadmap.length; i++){
-    const w = STATE.roadmap[i];
-    const start = w.startDate || w.deadline;
-    const end = w.deadline;
-    if(todayIso >= start && todayIso <= end){ detectedIdx = i; break; }
-  }
-  // If today is past every week's deadline, treat the last week as current
-  // (project running long); if today is before week 1 even starts, keep week 1.
-  if(detectedIdx===-1){
-    const first = STATE.roadmap[0];
-    const last = STATE.roadmap[STATE.roadmap.length-1];
-    if(todayIso < (first.startDate||first.deadline)) detectedIdx = 0;
-    else if(todayIso > last.deadline) detectedIdx = STATE.roadmap.length-1;
-  }
-  if(detectedIdx===-1) return;
-
-  STATE.roadmap.forEach((w, idx)=>{
-    if(w.manualOverride) return; // leader already decided this one manually — don't touch it
-    if(idx < detectedIdx){
-      // Past weeks auto-become 'done' UNLESS they still have unfinished
-      // tracked tasks, in which case we leave them 'current' so nothing
-      // silently vanishes as "complete" without actually being complete.
-      const weekTasks = STATE.tasks.filter(t=>t.weekId===w.id);
-      const allDone = weekTasks.length>0 && weekTasks.every(t=>t.status==='Finished');
-      w.status = (weekTasks.length===0 || allDone) ? 'done' : 'current';
-    } else if(idx === detectedIdx){
-      w.status = 'current';
-    } else {
-      w.status = 'upcoming';
-    }
-  });
-
-  // Keep currentWeekIndex pointing at whichever week is marked 'current'
-  // (prefer the auto-detected one if several ended up 'current').
-  const currentIdx = STATE.roadmap.findIndex(w=>w.id===STATE.roadmap[detectedIdx].id && w.status==='current');
-  STATE.currentWeekIndex = currentIdx!==-1 ? currentIdx : detectedIdx;
-  ensureWeekChecklist(STATE.currentWeekIndex);
 }
 
 function getCurrentWeek(){
@@ -1133,7 +1079,6 @@ function renderRoadmap(){
           <button class="btn btn-sm ${status==='current'?'btn-lav':'btn-outline'}" data-set-week-status="${week.id}|current">Mark as Current</button>
           <button class="btn btn-sm ${status==='done'?'btn-green':'btn-outline'}" data-set-week-status="${week.id}|done">Mark as Done</button>
           <button class="btn btn-sm ${status==='upcoming'?'btn-lav':'btn-outline'}" data-set-week-status="${week.id}|upcoming">Mark as Upcoming</button>
-          ${week.manualOverride ? `<button class="btn btn-sm btn-outline" data-reset-week-auto="${week.id}" title="Let the app auto-detect this week's status again based on today's date">↻ Back to Auto</button>` : `<span style="font-size:10px; color:var(--plum-soft); font-weight:700; opacity:.7;">🤖 auto-detected by date</span>`}
         </div>` : ''}
 
         ${isExpanded ? `
@@ -1162,7 +1107,6 @@ function renderRoadmap(){
       const [weekId, newStatus] = btn.dataset.setWeekStatus.split('|');
       const week = STATE.roadmap.find(w=>w.id===weekId);
       week.status = newStatus;
-      week.manualOverride = true; // leader's explicit choice now wins over auto-detection
       if(newStatus==='current'){
         const idx = STATE.roadmap.findIndex(w=>w.id===weekId);
         STATE.currentWeekIndex = idx;
@@ -1170,19 +1114,6 @@ function renderRoadmap(){
       }
       saveState();
       showToast(`${week.title} marked as ${newStatus.toUpperCase()}`);
-      renderAll();
-    });
-  });
-
-  document.querySelectorAll('[data-reset-week-auto]').forEach(btn=>{
-    btn.addEventListener('click', (e)=>{
-      e.stopPropagation();
-      if(!isLeader()){ showToast('Only the team leader can change this 👑'); return; }
-      const week = STATE.roadmap.find(w=>w.id===btn.dataset.resetWeekAuto);
-      delete week.manualOverride;
-      autoDetectCurrentWeek();
-      saveState();
-      showToast(`${week.title} is now auto-detected by date again 🤖`);
       renderAll();
     });
   });
