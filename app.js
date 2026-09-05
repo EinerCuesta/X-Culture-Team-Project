@@ -1076,10 +1076,13 @@ function renderRoadmap(){
         ${leader ? `
         <div style="display:flex; gap:8px; margin-top:12px; flex-wrap:wrap; align-items:center;">
           <span style="font-size:11px; font-weight:800; color:var(--plum-soft); align-self:center;">👑 Leader controls:</span>
-          <button class="btn btn-sm ${status==='current'?'btn-lav':'btn-outline'}" data-set-week-status="${week.id}|current">Mark as Current</button>
-          <button class="btn btn-sm ${status==='done'?'btn-green':'btn-outline'}" data-set-week-status="${week.id}|done">Mark as Done</button>
-          <button class="btn btn-sm ${status==='upcoming'?'btn-lav':'btn-outline'}" data-set-week-status="${week.id}|upcoming">Mark as Upcoming</button>
-        </div>` : ''}
+          <button type="button" class="btn btn-sm ${status==='current'?'btn-lav':'btn-outline'}" data-set-week-status="${week.id}|current">Mark as Current</button>
+          <button type="button" class="btn btn-sm ${status==='done'?'btn-green':'btn-outline'}" data-set-week-status="${week.id}|done">Mark as Done</button>
+          <button type="button" class="btn btn-sm ${status==='upcoming'?'btn-lav':'btn-outline'}" data-set-week-status="${week.id}|upcoming">Mark as Upcoming</button>
+        </div>` : `
+        <div style="margin-top:10px; font-size:11px; color:var(--plum-soft); font-weight:700; opacity:.8;">
+          🔒 Only the team leader can change a week's status. (You're signed in as: ${escapeHtml(user.name)}, role: ${user.role})
+        </div>`}
 
         ${isExpanded ? `
         <div style="margin-top:14px; padding-top:14px; border-top:1px solid var(--cream-2);">
@@ -1102,10 +1105,13 @@ function renderRoadmap(){
 
   document.querySelectorAll('[data-set-week-status]').forEach(btn=>{
     btn.addEventListener('click', (e)=>{
+      e.preventDefault();
       e.stopPropagation();
+      console.log('[Roadmap] Mark-status button clicked:', btn.dataset.setWeekStatus, 'currentUser role:', getCurrentUser() && getCurrentUser().role);
       if(!isLeader()){ showToast('Only the team leader can change a week\'s status 👑'); return; }
       const [weekId, newStatus] = btn.dataset.setWeekStatus.split('|');
       const week = STATE.roadmap.find(w=>w.id===weekId);
+      if(!week){ console.error('[Roadmap] Could not find week with id', weekId); return; }
       week.status = newStatus;
       if(newStatus==='current'){
         const idx = STATE.roadmap.findIndex(w=>w.id===weekId);
@@ -1609,4 +1615,4 @@ function renderAll(){
 function sendMeetingReminder(meetingData){
   // TODO: connect to a real email API (e.g. EmailJS, SendGrid, Supabase Edge Function).
   console.log('[Simulated email reminder]', meetingData);
-}
+} 
