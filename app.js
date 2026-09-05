@@ -595,14 +595,36 @@ function goPage(page){
 /* =========================================================
    CORE CALCULATIONS
    ========================================================= */
+/* Overall project % now blends two signals so it never gets "stuck" at 0%
+   just because the leader hasn't created individual tasks yet:
+     1) Real task completion (when a week HAS tracked tasks, its progress
+        is the % of those tasks that are "Finished" — same as before).
+     2) Manually-marked roadmap weeks: if the leader marks a week "done"
+        via the Roadmap page (even with zero tasks in it), that week counts
+        as 100% complete for the overall percentage.
+   Each of the 8 roadmap weeks contributes an equal share of the total. */
+function getWeekCompletionFraction(week){
+  const weekTasks = STATE.tasks.filter(t=>t.weekId===week.id);
+  if(week.status==='done') return 1; // manual override always wins as "fully done"
+  if(weekTasks.length===0) return 0; // no tasks and not manually marked done
+  const done = weekTasks.filter(t=>t.status==='Finished').length;
+  return done / weekTasks.length;
+}
+
 function getProgressStats(){
   const total = STATE.tasks.length;
   const completed = STATE.tasks.filter(t=>t.status==='Finished').length;
   const inProgress = STATE.tasks.filter(t=>t.status==='Working on it').length;
   const pending = STATE.tasks.filter(t=>t.status==='Not Started').length;
-  const pct = total===0 ? 0 : Math.min(100, Math.round((completed/total)*100));
   const todayIso = new Date().toISOString().slice(0,10);
   const overdue = STATE.tasks.filter(t=>t.status!=='Finished' && t.deadline && t.deadline < todayIso).length;
+
+  // Blended overall percentage across all roadmap weeks (see comment above).
+  const weeks = STATE.roadmap;
+  const pct = weeks.length===0 ? 0 : Math.min(100, Math.round(
+    (weeks.reduce((sum,w)=> sum + getWeekCompletionFraction(w), 0) / weeks.length) * 100
+  ));
+
   return {total, completed, inProgress, pending, pct, overdue};
 }
 
@@ -610,11 +632,13 @@ function getCurrentWeek(){
   return STATE.roadmap[STATE.currentWeekIndex] || STATE.roadmap[STATE.roadmap.length-1];
 }
 
+/* Per-week progress bar shown on the Roadmap page. A manually-marked
+   'done' week always shows 100%, even with zero tracked tasks — otherwise
+   the leader's own "Mark as Done" click would look like it did nothing. */
 function getWeekProgress(weekId){
-  const weekTasks = STATE.tasks.filter(t=>t.weekId===weekId);
-  if(weekTasks.length===0) return 0;
-  const done = weekTasks.filter(t=>t.status==='Finished').length;
-  return Math.round((done/weekTasks.length)*100);
+  const week = STATE.roadmap.find(w=>w.id===weekId);
+  if(!week) return 0;
+  return Math.round(getWeekCompletionFraction(week)*100);
 }
 
 function autoUpdateWeekCompletion(weekId){
@@ -1033,7 +1057,13 @@ function renderRoadmap(){
         </div>
         <div style="font-weight:800; margin-bottom:6px;">🎯 ${escapeHtml(week.goal)}</div>
         <div class="week-progress-track"><div class="week-progress-fill" style="width:${pct}%"></div></div>
-        <div style="font-size:12px; color:var(--plum-soft); font-weight:700; margin-top:4px;">${pct}% of this week's tasks complete (${weekTasks.filter(t=>t.status==='Finished').length}/${weekTasks.length||0} tasks)</div>
+        <div style="font-size:12px; color:var(--plum-soft); font-weight:700; margin-top:4px;">
+          ${weekTasks.length>0
+            ? `${pct}% of this week's tasks complete (${weekTasks.filter(t=>t.status==='Finished').length}/${weekTasks.length} tasks)`
+            : status==='done'
+              ? `${pct}% — marked Done by the leader (no tracked tasks in this week)`
+              : `No tracked tasks yet in this week`}
+        </div>
 
         ${leader ? `
         <div style="display:flex; gap:8px; margin-top:12px; flex-wrap:wrap; align-items:center;">
