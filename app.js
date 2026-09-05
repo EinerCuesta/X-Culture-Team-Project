@@ -128,6 +128,27 @@ function loadState(){
   ensureWeekChecklist(STATE.currentWeekIndex);
 }
 
+/* Basic structural sanity check for a state object coming from the cloud.
+   This is NOT full validation — just enough to catch "obviously broken /
+   partially written" documents (e.g. missing users array) so we never let
+   a bad snapshot silently wipe out real local data such as the current
+   user's own registration. */
+function isSaneCloudState(candidate, previous){
+  if(!candidate || typeof candidate !== 'object') return false;
+  if(!Array.isArray(candidate.users)) return false;
+  if(!Array.isArray(candidate.roadmap)) return false;
+  if(!candidate.meetings || typeof candidate.meetings !== 'object') return false;
+  // Guard against a transient/partial write: if we previously had users
+  // registered locally, a cloud snapshot that suddenly has ZERO users is
+  // almost certainly a half-finished write (or a stale/empty doc), not a
+  // legitimate "everyone got removed" event -- reject it defensively.
+  if(previous && Array.isArray(previous.users) && previous.users.length > 0
+     && candidate.users.length === 0){
+    return false;
+  }
+  return true;
+}
+
 // Called once Firebase is ready: subscribes to realtime updates so every
 // teammate's browser reflects the same shared data automatically.
 function subscribeToCloud(){
@@ -137,13 +158,23 @@ function subscribeToCloud(){
       if(suppressNextSnapshot){
         suppressNextSnapshot = false;
       } else {
-        const cloudState = snap.data().state;
-        if(cloudState){
-          STATE = JSON.parse(cloudState);
-          ensureWeekChecklist(STATE.currentWeekIndex);
-          persistLocalCache();
-          if(document.getElementById('app').style.display !== 'none'){
-            renderAll();
+        const cloudStateRaw = snap.data().state;
+        if(cloudStateRaw){
+          let parsed = null;
+          try{
+            parsed = JSON.parse(cloudStateRaw);
+          }catch(parseErr){
+            console.error('Cloud state was not valid JSON, ignoring this snapshot.', parseErr);
+          }
+          if(parsed && isSaneCloudState(parsed, STATE)){
+            STATE = parsed;
+            ensureWeekChecklist(STATE.currentWeekIndex);
+            persistLocalCache();
+            if(document.getElementById('app').style.display !== 'none'){
+              renderAll();
+            }
+          } else if(parsed){
+            console.warn('Ignored a cloud snapshot that looked partial/invalid (would have dropped local users).', parsed);
           }
         }
       }
@@ -253,8 +284,24 @@ function hideSyncBanner(){
   if(el) el.style.display = 'none';
 }
 
+/* Resolves the logged-in user. Normally this is a simple lookup, but if
+   CURRENT_USER_ID somehow isn't set in memory (e.g. right after a cloud
+   snapshot briefly raced with app state), fall back to re-reading the
+   session id straight from localStorage before giving up -- this avoids
+   spurious "you're not the leader" failures caused purely by a timing
+   hiccup rather than an actual permissions issue. */
 function getCurrentUser(){
-  return STATE.users.find(u=>u.id===CURRENT_USER_ID) || null;
+  let user = STATE.users.find(u=>u.id===CURRENT_USER_ID) || null;
+  if(!user){
+    try{
+      const sessionId = localStorage.getItem(SESSION_KEY);
+      if(sessionId && sessionId !== CURRENT_USER_ID){
+        CURRENT_USER_ID = sessionId;
+        user = STATE.users.find(u=>u.id===CURRENT_USER_ID) || null;
+      }
+    }catch(e){ /* localStorage unavailable — nothing more we can do */ }
+  }
+  return user;
 }
 
 function isLeader(user){
@@ -417,8 +464,11 @@ document.getElementById('registerForm').addEventListener('submit', async functio
     try{
       const snap = await fbDocRef.get();
       if(snap.exists && snap.data().state){
-        STATE = JSON.parse(snap.data().state);
-        ensureWeekChecklist(STATE.currentWeekIndex);
+        const parsed = JSON.parse(snap.data().state);
+        if(isSaneCloudState(parsed, STATE)){
+          STATE = parsed;
+          ensureWeekChecklist(STATE.currentWeekIndex);
+        }
       }
     }catch(err){
       console.error('Could not fetch latest team state before registering, using local copy.', err);
@@ -1107,8 +1157,18 @@ function renderRoadmap(){
     btn.addEventListener('click', (e)=>{
       e.preventDefault();
       e.stopPropagation();
-      console.log('[Roadmap] Mark-status button clicked:', btn.dataset.setWeekStatus, 'currentUser role:', getCurrentUser() && getCurrentUser().role);
-      if(!isLeader()){ showToast('Only the team leader can change a week\'s status 👑'); return; }
+      // If the current user can't be resolved right now (e.g. a Firestore
+      // snapshot happened to arrive a split second earlier), re-check once
+      // more before rejecting the click as a real permissions failure.
+      const clickUser = getCurrentUser();
+      if(!isLeader(clickUser)){
+        if(!clickUser){
+          showToast('Still syncing your session — please try again in a moment 🌸');
+        } else {
+          showToast('Only the team leader can change a week\'s status 👑');
+        }
+        return;
+      }
       const [weekId, newStatus] = btn.dataset.setWeekStatus.split('|');
       const week = STATE.roadmap.find(w=>w.id===weekId);
       if(!week){ console.error('[Roadmap] Could not find week with id', weekId); return; }
