@@ -9,6 +9,23 @@ const SESSION_KEY = 'xculture_hub_session_v1';
 
 const DAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
 
+/* ---------- Globals declared early to avoid temporal-dead-zone errors ----------
+   These are referenced by functions that can run during the boot sequence
+   (e.g. enterApp -> buildNav, or renderAll -> renderRoadmap), so they must
+   exist before any of that code runs, not just "later in the file". */
+const NAV_ITEMS = [
+  {page:'dashboard', icon:'🏠', label:'Dashboard'},
+  {page:'meetings', icon:'📅', label:'Meetings'},
+  {page:'roadmap', icon:'🗺️', label:'Roadmap'},
+  {page:'tasks', icon:'✅', label:'Tasks'},
+  {page:'progress', icon:'📊', label:'Progress'},
+  {page:'team', icon:'👥', label:'Team'},
+  {page:'history', icon:'📖', label:'History'},
+  {page:'profile', icon:'👤', label:'Profile'},
+];
+let expandedWeekId = null; // which roadmap week card is expanded to show its tasks
+let taskFilter = 'all'; // current filter selected on the Tasks page
+
 /* ---------- Firebase config & setup ---------- */
 const firebaseConfig = {
   apiKey: "AIzaSyBiM259TlXFAeooHVH9AQmGZLn3QAhLen4",
@@ -568,17 +585,6 @@ if(CURRENT_USER_ID && getCurrentUser()){
 /* =========================================================
    NAVIGATION
    ========================================================= */
-const NAV_ITEMS = [
-  {page:'dashboard', icon:'🏠', label:'Dashboard'},
-  {page:'meetings', icon:'📅', label:'Meetings'},
-  {page:'roadmap', icon:'🗺️', label:'Roadmap'},
-  {page:'tasks', icon:'✅', label:'Tasks'},
-  {page:'progress', icon:'📊', label:'Progress'},
-  {page:'team', icon:'👥', label:'Team'},
-  {page:'history', icon:'📖', label:'History'},
-  {page:'profile', icon:'👤', label:'Profile'},
-];
-
 function buildNav(){
   // Sidebar already has buttons with data-page; wire clicks
   document.querySelectorAll('.nav-item').forEach(btn=>{
@@ -1091,8 +1097,6 @@ document.addEventListener('click', function(e){
 /* =========================================================
    RENDER: ROADMAP
    ========================================================= */
-let expandedWeekId = null; // which week card is expanded to show its tasks
-
 function weekStatusBadgeLabel(status){
   return { done:'✅ DONE', current:'🔵 CURRENT', upcoming:'⏳ UPCOMING' }[status] || status;
 }
@@ -1240,8 +1244,6 @@ document.addEventListener('click', function(e){
 /* =========================================================
    RENDER: TASKS
    ========================================================= */
-let taskFilter = 'all';
-
 function renderTaskFilterBar(){
   const filters = [
     {key:'all', label:'All'},
